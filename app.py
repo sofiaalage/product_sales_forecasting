@@ -90,10 +90,7 @@ st.markdown(
     "<h3 style='font-family: Verdana, sans-serif; color: #a21a5e; font-size: 1.3em; margin-top: 20px; margin-bottom: 10px;'>Upload Your Data File</h3>",
     unsafe_allow_html=True
 )
-st.markdown(
-    "<p style='font-family: Arial, sans-serif; color: #5d5d5d; font-weight: normal; font-size: 0.85em;'>Please upload the Excel file containing stock, shipments, and shelf life data.</p>",
-    unsafe_allow_html=True
-)
+
 uploaded_file = st.file_uploader("Choose an Excel file (.xlsx or .xls)", type=["xlsx", "xls"], label_visibility="collapsed")
 
 if uploaded_file is not None:
@@ -198,6 +195,15 @@ if uploaded_file is not None:
 
     final_analysis_df_sequential = pd.DataFrame(sequential_analysis_results)
 
+    # --- Prepare filter options ---
+    if not final_analysis_df_sequential.empty:
+        available_months = sorted(final_analysis_df_sequential['Forecast Ship Date'].dt.strftime('%Y-%m').unique())
+        available_customers = sorted(final_analysis_df_sequential['Ship To Customer (Bill To)'].unique())
+        available_medicines = sorted(final_analysis_df_sequential['Item Description'].unique())
+    else:
+        available_months, available_customers, available_medicines = [], [], []
+
+
     st.markdown(
         """
         <style>
@@ -249,7 +255,6 @@ if uploaded_file is not None:
 
 
     with tab_matrix:
-
         st.markdown(
             "<h3 style='font-family: Verdana, sans-serif; color: #a21a5e; font-size: 1.3em;'>Detailed Stock Analysis Matrix (June - Dec 2025 Forecast - Sequential)</h3>",
             unsafe_allow_html=True
@@ -265,43 +270,62 @@ if uploaded_file is not None:
             unsafe_allow_html=True
         )
 
-        final_analysis_df_sequential['Required Expiration Date (Customer)'] = final_analysis_df_sequential.apply(
-            lambda row: row['Forecast Ship Date'] + pd.DateOffset(months=row['Min Shelf-Life (Months)']), axis=1
-        )
+        # --- Filters for Detailed Matrix ---
+        col_filter1_matrix, col_filter2_matrix, col_filter3_matrix = st.columns(3)
+        with col_filter1_matrix:
+            selected_month_matrix = st.selectbox("Month (YYYY-MM):", options=['All'] + available_months, key='month_matrix')
+        with col_filter2_matrix:
+            selected_customer_matrix = st.selectbox("Customer:", options=['All'] + available_customers, key='customer_matrix')
+        with col_filter3_matrix:
+            selected_medicine_matrix = st.selectbox("Item:", options=['All'] + available_medicines, key='medicine_matrix')
 
-        display_columns = [
-            'Item Description',
-            'Forecast Ship Date',
-            'Forecasted Qty',
-            'Ship To Customer (Bill To)',
-            'Available Stock Quantity (Initial)', # Initial stock for reference
-            'Remaining Stock After Order',      # Stock remaining after this order
-            'Expiration Date (Stock)',          # Earliest stock expiry for the product
-            'Min Shelf-Life (Months)',          # Customer requirement in months
-            'Required Expiration Date (Customer)', # Calculated minimum date
-            'In Stock Status',
-            'Missing Quantity'
-        ]
-        
-        final_matrix_sequential = final_analysis_df_sequential[display_columns].copy()
-        
-        final_matrix_sequential['Forecast Ship Date'] = final_matrix_sequential['Forecast Ship Date'].dt.strftime('%Y-%m-%d')
-        final_matrix_sequential['Expiration Date (Stock)'] = final_matrix_sequential['Expiration Date (Stock)'].dt.strftime('%Y-%m-%d').replace({pd.NaT: 'N/A'})
-        final_matrix_sequential['Required Expiration Date (Customer)'] = final_matrix_sequential['Required Expiration Date (Customer)'].dt.strftime('%Y-%m-%d')
-
-        st.dataframe(final_matrix_sequential, use_container_width=True)
+        # Filter data for the matrix
+        filtered_data_matrix = final_analysis_df_sequential.copy()
+        if selected_month_matrix != 'All':
+            filtered_data_matrix = filtered_data_matrix[filtered_data_matrix['Forecast Ship Date'].dt.strftime('%Y-%m') == selected_month_matrix]
+        if selected_customer_matrix != 'All':
+            filtered_data_matrix = filtered_data_matrix[filtered_data_matrix['Ship To Customer (Bill To)'] == selected_customer_matrix]
+        if selected_medicine_matrix != 'All':
+            filtered_data_matrix = filtered_data_matrix[filtered_data_matrix['Item Description'] == selected_medicine_matrix]
 
 
+        if not filtered_data_matrix.empty:
+            filtered_data_matrix['Required Expiration Date (Customer)'] = filtered_data_matrix.apply(
+                lambda row: row['Forecast Ship Date'] + pd.DateOffset(months=row['Min Shelf-Life (Months)']), axis=1
+            )
+
+            display_columns = [
+                'Item Description',
+                'Forecast Ship Date',
+                'Forecasted Qty',
+                'Ship To Customer (Bill To)',
+                'Available Stock Quantity (Initial)', # Initial stock for reference
+                'Remaining Stock After Order',      # Stock remaining after this order
+                'Expiration Date (Stock)',          # Earliest stock expiry for the product
+                'Min Shelf-Life (Months)',          # Customer requirement in months
+                'Required Expiration Date (Customer)', # Calculated minimum date
+                'In Stock Status',
+                'Missing Quantity'
+            ]
+            
+            final_matrix_display = filtered_data_matrix[display_columns].copy()
+            
+            final_matrix_display['Forecast Ship Date'] = final_matrix_display['Forecast Ship Date'].dt.strftime('%Y-%m-%d')
+            final_matrix_display['Expiration Date (Stock)'] = final_matrix_display['Expiration Date (Stock)'].dt.strftime('%Y-%m-%d').replace({pd.NaT: 'N/A'})
+            final_matrix_display['Required Expiration Date (Customer)'] = final_matrix_display['Required Expiration Date (Customer)'].dt.strftime('%Y-%m-%d')
+
+            st.dataframe(final_matrix_display, use_container_width=True)
+        else:
+            st.info("No data to display for the selected filters in the Detailed Matrix.")
+
+
         
-        total_forecasted_qty = final_analysis_df_sequential['Forecasted Qty'].sum()
-        total_missing_qty = final_analysis_df_sequential['Missing Quantity'].sum()
+        total_forecasted_qty = final_analysis_df_sequential['Forecasted Qty'].sum() # This remains global for context or should be filtered too?
+        total_missing_qty_overall = final_analysis_df_sequential['Missing Quantity'].sum() # This remains global for context
         
-        items_fully_covered = final_analysis_df_sequential[final_analysis_df_sequential['In Stock Status'] == 'Yes'].shape[0]
-        total_forecasted_items = final_analysis_df_sequential.shape[0]
-        
-        percentage_capacity = 0
-        if total_forecasted_items > 0:
-            percentage_capacity = (items_fully_covered / total_forecasted_items) * 100
+        # KPIs below the matrix could also be filtered or show overall. For now, they are overall.
+        # If they need to be filtered, use filtered_data_matrix for these calculations.
+
         st.markdown(
             """
             <style>
@@ -341,105 +365,135 @@ if uploaded_file is not None:
             unsafe_allow_html=True
         )
     with tab_kpis_charts:
-        col1, col2= st.columns(2)
-        with col1:
-            st.metric(
-                label="Stock Capacity (Items Meeting All Criteria - Sequential)",
-                value=f"{percentage_capacity:.2f}%"
-            )
-        with col2:
-            st.metric(
-                label="Total Quantity Missing Across All Forecasts (Sequential)",
-                value=f"{total_missing_qty:,.0f}"
-            )
+        # --- Filters for KPIs & Charts ---
+        col_filter1_kpi, col_filter2_kpi, col_filter3_kpi = st.columns(3)
+        with col_filter1_kpi:
+            selected_month_kpi = st.selectbox("Month (YYYY-MM):", options=['All'] + available_months, key='month_kpi')
+        with col_filter2_kpi:
+            selected_customer_kpi = st.selectbox("Customer:", options=['All'] + available_customers, key='customer_kpi')
+        with col_filter3_kpi:
+            selected_medicine_kpi = st.selectbox("Item:", options=['All'] + available_medicines, key='medicine_kpi')
+
+        # Filter data for KPIs and Charts
+        filtered_data_kpis = final_analysis_df_sequential.copy()
+        if selected_month_kpi != 'All':
+            filtered_data_kpis = filtered_data_kpis[filtered_data_kpis['Forecast Ship Date'].dt.strftime('%Y-%m') == selected_month_kpi]
+        if selected_customer_kpi != 'All':
+            filtered_data_kpis = filtered_data_kpis[filtered_data_kpis['Ship To Customer (Bill To)'] == selected_customer_kpi]
+        if selected_medicine_kpi != 'All':
+            filtered_data_kpis = filtered_data_kpis[filtered_data_kpis['Item Description'] == selected_medicine_kpi]
+
+        if not filtered_data_kpis.empty:
+            kpi_total_forecasted_qty = filtered_data_kpis['Forecasted Qty'].sum()
+            kpi_total_missing_qty = filtered_data_kpis['Missing Quantity'].sum()
+            
+            kpi_items_fully_covered = filtered_data_kpis[filtered_data_kpis['In Stock Status'] == 'Yes'].shape[0]
+            kpi_total_forecasted_items = filtered_data_kpis.shape[0]
+            
+            kpi_percentage_capacity = 0
+            if kpi_total_forecasted_items > 0:
+                kpi_percentage_capacity = (kpi_items_fully_covered / kpi_total_forecasted_items) * 100
+
+            col1_kpi_display, col2_kpi_display = st.columns(2)
+            with col1_kpi_display:
+                st.metric(
+                    label="Stock Capacity (Items Meeting All Criteria - Filtered)",
+                    value=f"{kpi_percentage_capacity:.2f}%"
+                )
+            with col2_kpi_display:
+                st.metric(
+                    label="Total Quantity Missing (Filtered)",
+                    value=f"{kpi_total_missing_qty:,.0f}"
+                )
+        else:
+            st.info("No data for KPIs based on selected filters.")
+            kpi_percentage_capacity = 0 # Default values if no data
+            kpi_total_missing_qty = 0
+
 
         st.markdown(
             """
-            <p style='font-family: Arial, sans-serif; color: #5d5d5d; font-weight: normal; font-size: 0.7em;'>
-            *Stock Capacity represents the percentage of forecasted product-customer-month combinations
-            that can be fully met by current stock, considering both available quantity and the required shelf-life,
-            after accounting for stock depletion by earlier orders.
-            </p>
+            <style>
+            /* Estilo geral para os containers das métricas (os "cards") */
+            div[data-testid="stMetric"] {
+                background-color: white; /* Fundo branco para o card */
+                border-radius: 10px; /* Bordas arredondadas */
+                padding: 20px; /* Espaçamento interno */
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Sombra suave para efeito de card */
+                margin-bottom: 20px; /* Espaçamento entre os cards e o conteúdo abaixo */
+            }
+
+            /* Estilo para o rótulo (label) da métrica */
+            div[data-testid="stMetric"] label p {
+                font-family: Arial, sans-serif; /* Fonte do subtítulo da página principal */
+                color: #5d5d5d ; /* Cor cinza escuro para o rótulo */
+                font-weight: bold; /* Sem negrito */
+                font-size: 1em; /* Tamanho da fonte do rótulo */
+            }
+
+            /* Estilo para o valor (value) da métrica */
+            div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+                font-family: Verdana, sans-serif; /* Fonte do título da página principal */
+                color: #a21a5e; /* Cor vinho para o valor */
+                font-size: 2.5em; /* Aumenta o tamanho do valor para destaque */
+                font-weight: bold; /* Deixa o valor em negrito */
+            }
+
+            /* Estilo para o delta (se houver um) na métrica */
+            div[data-testid="stMetricDelta"] {
+                font-family: Arial, sans-serif; /* Fonte consistente */
+                color: #5d5d5d; /* Cor cinza escuro */
+                font-size: 1em; /* Tamanho padrão */
+            }
+            </style>
             """,
             unsafe_allow_html=True
         )
-
-        st.markdown("---")    
-
-
-
-        col1, col2= st.columns(2)
-        with col1:
+        col1_charts, col2_charts = st.columns(2) # Renamed to avoid conflict
+        with col1_charts:
 
             st.markdown(
-                "<h4 style='font-family: Verdana, sans-serif; color: #a21a5e; font-size: 1.2em;'>Monthly Forecasted Orders (June - Dec 2025)</h4>",
+                "<h4 style='font-family: Verdana, sans-serif; color: #a21a5e; font-size: 1.2em;'>Monthly Forecasted Orders (Filtered)</h4>",
                 unsafe_allow_html=True
             )
+            if not filtered_data_kpis.empty:
+                monthly_forecast_chart_data = filtered_data_kpis.groupby(filtered_data_kpis['Forecast Ship Date'].dt.to_period('M'))['Forecasted Qty'].sum().reset_index()
+                monthly_forecast_chart_data['Month'] = monthly_forecast_chart_data['Forecast Ship Date'].dt.strftime('%b %Y')
 
-            monthly_forecast = final_analysis_df_sequential.groupby(final_analysis_df_sequential['Forecast Ship Date'].dt.to_period('M'))['Forecasted Qty'].sum().reset_index()
-            monthly_forecast['Month'] = monthly_forecast['Forecast Ship Date'].dt.strftime('%b %Y')
-
-            fig_px_bar = px.bar(
-                monthly_forecast,
-                x='Month',
-                y='Forecasted Qty'
-            )
-            fig_px_bar.update_traces(marker_color='#c7c8c9')
-
-            fig_px_bar.update_layout(
-                hoverlabel=dict(
-                    bgcolor="#a21a5e", 
-                    font_size=12,
-                    font_color="#ffffff",
-                    font_family="Arial, sans-serif" 
-                ),
-                plot_bgcolor='rgba(0,0,0,0)', 
-                paper_bgcolor='rgba(0,0,0,0)', 
-
-            )
+                fig_px_bar = px.bar(
+                    monthly_forecast_chart_data,
+                    x='Month',
+                    y='Forecasted Qty'
+                )
+                fig_px_bar.update_traces(marker_color='#c7c8c9')
+                fig_px_bar.update_layout(
+                    hoverlabel=dict(
+                        bgcolor="#a21a5e", 
+                        font_size=12,
+                        font_color="#ffffff",
+                        font_family="Arial, sans-serif" 
+                    ),
+                    plot_bgcolor='rgba(0,0,0,0)', 
+                    paper_bgcolor='rgba(0,0,0,0)', 
+                )
+                st.plotly_chart(fig_px_bar, use_container_width=True)
+            else:
+                st.info("No monthly forecast data to display for the selected filters.")
 
 
             st.markdown(
-                """
-                <style>
-                /* Altera o cursor para 'pointer' ao passar sobre a área do gráfico Plotly */
-                .plotly-graph-div {
-                    cursor: pointer !important;
-                }
-                </style>
-                """,
+                "<h4 style='font-family: Verdana, sans-serif; color: #a21a5e; font-size: 1.2em;'>Overall Stock Sufficiency by Quantity (Filtered)</h4>",
                 unsafe_allow_html=True
             )
-
-
-            st.plotly_chart(fig_px_bar, use_container_width=True)
-
-
-
-
-        with col2:
-            # Título do Gráfico de Suficiência: mesma fonte e cor vinho
-# Título do Gráfico de Suficiência: mesma fonte e cor vinho
-            st.markdown(
-                "<h4 style='font-family: Verdana, sans-serif; color: #a21a5e; font-size: 1.2em;'>Overall Stock Sufficiency by Quantity (Based on Sequential Analysis)</h4>",
-                unsafe_allow_html=True
-            )
-            total_covered_qty = total_forecasted_qty - total_missing_qty
-
-
-            if total_forecasted_qty > 0:
-                # Dados para o gráfico de pizza
-                pie_data = pd.DataFrame({
+            
+            if not filtered_data_kpis.empty and kpi_total_forecasted_qty > 0:
+                pie_total_covered_qty = kpi_total_forecasted_qty - kpi_total_missing_qty
+                pie_data_chart = pd.DataFrame({
                     'Category': ['Quantity Covered', 'Quantity Missing'],
-                    'Quantity': [total_covered_qty, total_missing_qty]
+                    'Quantity': [pie_total_covered_qty, kpi_total_missing_qty]
                 })
-
-                # Cores para as fatias da pizza
-                colors = ['#a21a5e', '#c7c8c9']  # Verde para Covered, Vinho para Missing
-
-                # Criar o gráfico de pizza (donut) com Plotly Express
                 fig_pie = px.pie(
-                    pie_data,
+                    pie_data_chart,
                     values='Quantity',
                     names='Category',
                     color='Category',
@@ -448,15 +502,11 @@ if uploaded_file is not None:
                         'Quantity Missing': '#c7c8c9'
                     }
                 )
-
-                # Ordenar as fatias (opcional, mas recomendado para melhor legibilidade)
                 fig_pie.update_traces(
-                    sort=False,  # Mantém a ordem original dos dados
+                    sort=False,
                     textposition='inside',
                     textinfo='percent+label',
                 )
-
-                # Ajustar o layout do gráfico
                 fig_pie.update_layout(
                     plot_bgcolor='rgba(0,0,0,0)',
                     paper_bgcolor='rgba(0,0,0,0)',
@@ -476,15 +526,13 @@ if uploaded_file is not None:
                         x=1
                     )
                 )
-
                 st.plotly_chart(fig_pie, use_container_width=True)
             else:
-                st.info("No forecasted quantities to display for sufficiency analysis.")
+                st.info("No stock sufficiency data to display for the selected filters.")
 
 
 
     with tab_hierarchical:
-
         st.markdown(
             "<h3 style='font-family: Verdana, sans-serif; color: #a21a5e; font-size: 1.3em;'>Hierarchical View of Analysis Results (Sequential)</h3>",
             unsafe_allow_html=True
@@ -500,36 +548,64 @@ if uploaded_file is not None:
             unsafe_allow_html=True
         )
 
-        # Group by Product Description for a hierarchical view using expanders
-        for product in final_matrix_sequential['Item Description'].unique():
-            product_df = final_matrix_sequential[final_matrix_sequential['Item Description'] == product]
-            
-            # Calculate product-level summaries
-            product_total_forecasted = product_df['Forecasted Qty'].sum()
-            product_total_missing = product_df['Missing Quantity'].sum()
+        # --- Filters for Hierarchical View ---
+        col_filter1_hier, col_filter2_hier, col_filter3_hier = st.columns(3)
+        with col_filter1_hier:
+            selected_month_hier = st.selectbox("Month (YYYY-MM):", options=['All'] + available_months, key='month_hier')
+        with col_filter2_hier:
+            selected_customer_hier = st.selectbox("Customer:", options=['All'] + available_customers, key='customer_hier')
+        with col_filter3_hier:
+            selected_medicine_hier = st.selectbox("Item:", options=['All'] + available_medicines, key='medicine_hier')
 
-            with st.expander(f"**Product:** {product} (Total Forecasted: {product_total_forecasted:,.0f} | Missing: {product_total_missing:,.0f})"):
-                st.markdown(f"**Customer Details for {product}:**")
-                # Iterate through customers and display their data directly within the product expander
-                for customer in product_df['Ship To Customer (Bill To)'].unique():
-                    customer_df = product_df[product_df['Ship To Customer (Bill To)'] == customer]
-                    
-                    customer_shelf_life = customer_df['Min Shelf-Life (Months)'].iloc[0] if not customer_df.empty else 'N/A'
-                    customer_total_forecasted = customer_df['Forecasted Qty'].sum()
-                    customer_total_missing = customer_df['Missing Quantity'].sum()
+        # Filter data for the hierarchical view
+        filtered_data_hierarchical = final_analysis_df_sequential.copy()
+        if selected_month_hier != 'All':
+            filtered_data_hierarchical = filtered_data_hierarchical[filtered_data_hierarchical['Forecast Ship Date'].dt.strftime('%Y-%m') == selected_month_hier]
+        if selected_customer_hier != 'All':
+            filtered_data_hierarchical = filtered_data_hierarchical[filtered_data_hierarchical['Ship To Customer (Bill To)'] == selected_customer_hier]
+        if selected_medicine_hier != 'All':
+            filtered_data_hierarchical = filtered_data_hierarchical[filtered_data_hierarchical['Item Description'] == selected_medicine_hier]
 
-                    # Using a smaller header or just bold text for customer details
-                    st.markdown(f"**Customer:** {customer} | Req. Shelf-life: {customer_shelf_life} months (Forecasted: {customer_total_forecasted:,.0f} | Missing: {customer_total_missing:,.0f})")
-                    st.dataframe(customer_df[[
-                        'Forecast Ship Date',
-                        'Forecasted Qty',
-                        'Available Stock Quantity (Initial)',
-                        'Remaining Stock After Order',
-                        'Expiration Date (Stock)',
-                        'Required Expiration Date (Customer)',
-                        'In Stock Status',
-                        'Missing Quantity'
-                    ]].reset_index(drop=True), use_container_width=True)
+        if not filtered_data_hierarchical.empty:
+            # Prepare data for display (similar to matrix tab, but used within expanders)
+            # Ensure 'Required Expiration Date (Customer)' is calculated for the filtered data
+            filtered_data_hierarchical['Required Expiration Date (Customer)'] = filtered_data_hierarchical.apply(
+                lambda row: row['Forecast Ship Date'] + pd.DateOffset(months=row['Min Shelf-Life (Months)']), axis=1
+            )
+            # Format dates for display
+            display_df_hierarchical = filtered_data_hierarchical.copy()
+            display_df_hierarchical['Forecast Ship Date'] = display_df_hierarchical['Forecast Ship Date'].dt.strftime('%Y-%m-%d')
+            display_df_hierarchical['Expiration Date (Stock)'] = display_df_hierarchical['Expiration Date (Stock)'].dt.strftime('%Y-%m-%d').replace({pd.NaT: 'N/A'})
+            display_df_hierarchical['Required Expiration Date (Customer)'] = display_df_hierarchical['Required Expiration Date (Customer)'].dt.strftime('%Y-%m-%d')
+
+            for product in display_df_hierarchical['Item Description'].unique():
+                product_df_hier = display_df_hierarchical[display_df_hierarchical['Item Description'] == product]
+                
+                product_total_forecasted = product_df_hier['Forecasted Qty'].sum() # Use original Qty for sum
+                product_total_missing = product_df_hier['Missing Quantity'].sum()
+
+                with st.expander(f"**Product:** {product} (Total Forecasted: {product_total_forecasted:,.0f} | Missing: {product_total_missing:,.0f})"):
+                    st.markdown(f"**Customer Details for {product}:**")
+                    for customer in product_df_hier['Ship To Customer (Bill To)'].unique():
+                        customer_df_hier = product_df_hier[product_df_hier['Ship To Customer (Bill To)'] == customer]
+                        
+                        customer_shelf_life = customer_df_hier['Min Shelf-Life (Months)'].iloc[0] if not customer_df_hier.empty else 'N/A'
+                        customer_total_forecasted = customer_df_hier['Forecasted Qty'].sum()
+                        customer_total_missing = customer_df_hier['Missing Quantity'].sum()
+
+                        st.markdown(f"**Customer:** {customer} | Req. Shelf-life: {customer_shelf_life} months (Forecasted: {customer_total_forecasted:,.0f} | Missing: {customer_total_missing:,.0f})")
+                        st.dataframe(customer_df_hier[[
+                            'Forecast Ship Date',
+                            'Forecasted Qty',
+                            'Available Stock Quantity (Initial)',
+                            'Remaining Stock After Order',
+                            'Expiration Date (Stock)',
+                            'Required Expiration Date (Customer)',
+                            'In Stock Status',
+                            'Missing Quantity'
+                        ]].reset_index(drop=True), use_container_width=True)
+        else:
+            st.info("No data to display for the selected filters in the Hierarchical View.")
 
         st.markdown("---")
 else:
